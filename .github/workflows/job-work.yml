@@ -1,4 +1,4 @@
-name: IGPSport Data Sync To Xingzhe 
+name: Garmin & IGPSport Data Sync To Xingzhe 
 
 on:
   schedule:
