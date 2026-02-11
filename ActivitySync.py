@@ -15,6 +15,17 @@ def encrpt(password, public_key):
     cipher = PKCS1_v1_5.new(rsa)
     return base64.b64encode(cipher.encrypt(password.encode())).decode()
 
+# ========== 新增：佳明→行者运动类型映射 ==========
+def get_xingzhe_sport_type(garmin_sport_type):
+    sport_map = {
+        "cycling": 3,       # 骑行
+        "running": 1,       # 跑步
+        "hiking": 2,        # 徒步
+        "walking": 2        # 步行（归为徒步）
+    }
+    # 未匹配到的类型默认按骑行处理（避免同步失败）
+    return sport_map.get(garmin_sport_type.lower(), 3)
+
 def syncData(username, password, garmin_email = None, garmin_password = None):
     headers = {
         'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
@@ -33,16 +44,17 @@ def syncData(username, password, garmin_email = None, garmin_password = None):
     if garmin_password is not None and garmin_password != '':
         type = 2 #garmin
 
-
     # login account
     if type == 2:
-        print("同步佳明数据")
+        print("同步佳明数据（骑行/跑步/徒步）")
 
         garth.configure(domain="garmin.cn")
         garth.login(garmin_email, garmin_password)
+        # ========== 修改1：移除activityType筛选，扩大limit到50 ==========
         activities = garth.connectapi(
             f"/activitylist-service/activities/search/activities",
-            params={"activityType": "cycling", "limit": 10, "start": 0, 'excludeChildren': False},
+            # 删掉"activityType": "cycling"，获取所有运动类型；limit从10→50避免漏数据
+            params={"limit": 50, "start": 0, 'excludeChildren': False},
         )
     else:
         print("同步IGP数据")
@@ -86,8 +98,8 @@ def syncData(username, password, garmin_email = None, garmin_password = None):
     result  = json.loads(res.text, strict=False)
     print("用户名:%s" % result['data']['username'])
 
-    # get current month data
-    url     = "https://www.imxingzhe.com/api/v1/pgworkout/?offset=0&limit=10&sport=3&year=&month="
+    # ========== 修改2：获取行者所有运动类型数据（删掉sport=3筛选） ==========
+    url     = "https://www.imxingzhe.com/api/v1/pgworkout/?offset=0&limit=50&year=&month="
     res     = session.get(url, headers=headers)
     result  = json.loads(res.text, strict=False)
     data  = result["data"]["data"]
@@ -118,9 +130,7 @@ def syncData(username, password, garmin_email = None, garmin_password = None):
             sync_data.append(activity)
 
     if len(sync_data) == 0:
-
         print("nothing data need sync")
-
     else:
         #down file
         upload_url = "https://www.imxingzhe.com/api/v1/fit/upload/"
@@ -128,7 +138,11 @@ def syncData(username, password, garmin_email = None, garmin_password = None):
             if type == 2:  # garmin
                 rid     = sync_item['activityId']
                 rid = str(rid)
-                print("sync rid:" + rid)
+                # ========== 修改3：获取佳明运动类型，映射行者类型 ==========
+                garmin_sport = sync_item["activityType"]["typeKey"]
+                xingzhe_sport = get_xingzhe_sport_type(garmin_sport)
+                print(f"sync rid:{rid} | 运动类型：{garmin_sport} → 行者类型：{xingzhe_sport}")
+                
                 res = garth.download(
                     f"/download-service/files/activity/{rid}",
                 )
@@ -142,15 +156,14 @@ def syncData(username, password, garmin_email = None, garmin_password = None):
                         "file_source": (None, "undefined", None),
                         "fit_filename": (None, rid+"_ACTIVITY.fit", None),
                         "md5": (None, hashlib.md5(data).hexdigest(), None),
-                        "name": (None, 'Garmin-' + sync_item["startTimeLocal"], None),
-                        "sport": (None, 3, None),  # 骑行
+                        "name": (None, f'Garmin-{garmin_sport}-' + sync_item["startTimeLocal"], None),
+                        "sport": (None, xingzhe_sport, None),  # 使用映射后的类型
                         "fit_file": (rid+"_ACTIVITY.fit", data, 'application/octet-stream')
                     })
             else:
                 rid     = sync_item["RideId"]
                 rid     = str(rid)
                 print("sync rid:" + rid)
-
 
                 fit_json = "https://prod.zh.igpsport.com/service/web-gateway/web-analyze/activity/getDownloadUrl/%s" % rid
                 res = session.get(fit_json)
@@ -168,7 +181,7 @@ def syncData(username, password, garmin_email = None, garmin_password = None):
                     "fit_filename": (None, sync_item["StartTime"]+'.fit', None),
                     "md5": (None, hashlib.md5(res.content).hexdigest(), None),
                     "name": (None, 'IGPSPORT-'+sync_item["StartTime"], None),
-                    "sport": (None, 3, None),  # 骑行
+                    "sport": (None, 3, None),  # IGP仍默认骑行（如需支持IGP多类型可扩展）
                     "fit_file": (sync_item["StartTime"]+'.fit', res.content, 'application/octet-stream')
                 })
 
